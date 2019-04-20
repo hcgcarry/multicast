@@ -97,11 +97,13 @@ int main(int argc, char *argv[])
 		printf("Reading datagram message...OK.\n");
 		printf("The message from multicast server is: \"%s\"\n", databuf);
 	}
+	
 	if(argc<3){
 		fprintf(stderr,"there is no enough parameter");
 		exit(1);
 	}
 	FILE *fp;
+	//打開要寫的檔案
 	if((fp=fopen(filename,"wb"))==NULL){
 		perror("there have error at open file");
 		exit(1);
@@ -131,57 +133,60 @@ int main(int argc, char *argv[])
 		numBytes=read(sd,fecDataBuf,2*databufferSize);
 		//printf("fecdatabuf numBytes:%d \n",numBytes);
 
+		//如果read出問題
 		if(numBytes <0){
 			perror("receive bytes <0");
+			//計算出問題的個數
 			numBytesLessThanZeroCount++;
 			
 			continue;
 		}
+		//因為fecDataBuf read到的事經過hamming encode的所以這邊要解碼
 		for(int i=0;i<databufferSize;i++){
-			//將經過fec encode的data decode ，如果有bit錯誤的話會修正
+			//解碼的程式 可以修正錯誤
 			databuf[i]=hamming8BitDecode(fecDataBuf+i*2);
-			//將其decode成沒有經過修正的data ，用來比對有經過fec和沒有經過fec的封包錯誤率
+			//解碼成沒有修正錯誤的 用來計算有解碼跟沒解碼的loss rate difference
 			originDataBuf[i]=decode2OriginChar(fecDataBuf+i*2);
 		}
-		//因為data有經過decode所以資料長度要做修正
+		//因為decode 所以修正得到的資料量 headerpadding是 header: 包的序號長度加上錯誤碼的長度
 		numBytes=(numBytes-headerPadding*2)/2;
 
 		
-		//將放在header的封包序號擷取下來
+		//將header的seqnum從字元轉成數字得到seqnum
 		curSeqNum=Char2Dec(databuf,0,3);
 
-		//將放在header的錯誤判別碼擷取下來，這個是server給的用來派段client接受到的data有沒有錯誤
+		//將header的errorchecker從字元轉成數字 這個式server傳來給client用來判斷client data有沒錯誤的
 		serverGiveErrorChecker=Char2Dec(databuf,4,7);
-		//client 計算經過fec的data的errorchecker 就是將每一個data的char相加
+		//client 將char相加得到client端的errorchecker用來跟server給的errorchecker比對
 		clientCheckErrorChecker=errorChecker(databuf+headerPadding,numBytes);
-		//client計算沒經過fec的data的errorchecker 用來跟有經過fec的封包錯誤率做比對
+		//這個是計算原始沒有經過hamming修正的data的char相加得到errorchecker
 		originDataClientErrorChecker=errorChecker(originDataBuf+headerPadding,\
 		numBytes);
-		//計算經過fec的data錯誤的次數
+		//client errorchecker與server給的errorchecker不一樣的話就代表封包錯誤
 		if(clientCheckErrorChecker!=serverGiveErrorChecker){
 			puts("@@@with fec data has different with server send data");
 			withFecDataCorrputCount++;
 		}
-		//經過fec和沒有經過fec的data不一樣的次數
+		//比對有fec修正和沒有fec修正的errorchecker
 		if(clientCheckErrorChecker!=originDataClientErrorChecker){
 			puts("$$$difference between fec and without fec");
 			withFecAndWithoutFecDifCount++;
 		}
-		//沒有經過fec的data錯誤次數
+		//比對沒fec修正的data是否正確
 		if(originDataClientErrorChecker!=serverGiveErrorChecker){
 			puts("%%%without fec data has difference with server send data");
 			withoutFecDataCorrputCount++;
 		}
 		printf("clientErrorChecker:%d originDataErrorChecker:%d serverErrorChecker:%d\n",\
 		clientCheckErrorChecker,originDataClientErrorChecker, serverGiveErrorChecker);
-		//因為封包序號在0~10000的範圍內，如果超過10000就會重製成0所以會變得比previous的封包序號小
-		//而我們是透過current的封包序號減掉previous的封包序號來計算丟失的封包的 所以如果重製的話要做修正
+		//因為我們的seqnum的範圍再0~10000所以如果seqnum重製的話就會比前一個seqnum小(重0開始)
+		//而如果要計算沒接收到的封包個數的話就要對前一個seqnum做修正將其剪掉9999
 		if(curSeqNum<preSeqNum){
 			preSeqNum=preSeqNum-9999;
 		}
-		//計算這一次read計算到的丟失封包數
+		//這一次封包的序號跟上一次封包的序號比對可以找出丟失的封包個數
 		curNotReceivePackageNum=curSeqNum-preSeqNum-1;
-		//目前總共丟失的封包數
+		//所有丟失的封包個數
 		totalNotReceivePackageNum+=curNotReceivePackageNum;
 		if(curNotReceivePackageNum>0){
 			puts("!!!!!!!!!!!!!!!!!!!!!!!!packages loss!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
@@ -191,9 +196,7 @@ int main(int argc, char *argv[])
 		preSeqNum=curSeqNum;
 		//printBuffer(databuf+headerPadding,numBytes);
 		//如果寫入的numBytes比資料長度常就會寫入亂碼
-		//將資料寫道file中 databuf+headerPadding是因為我們將前面幾個bit當作header存放seqnum和errorchecker
 		numBytes=fwrite(databuf+headerPadding,sizeof(char),numBytes,fp);
-		//判斷是否結尾
 		if(numBytes < databufferSize-headerPadding){
 			puts("&&&&&&&&&&&&&&&&&&&&&&");
 			puts("receive complete");
@@ -206,16 +209,16 @@ int main(int argc, char *argv[])
 
 
 	}
-	//這邊就是將資料顯示出來
-	printf("with fec package content error rate:%d\n",\
-	withFecDataCorrputCount/totalReceivePackageNum);
-	printf("without fec package content error rate:%d\n",\
-	withoutFecDataCorrputCount/totalReceivePackageNum);
-	printf("with fec loss rate:%d\n",\
-	(totalNotReceivePackageNum+withFecDataCorrputCount)/\
+	printf("total package not receive:%d\n",totalNotReceivePackageNum);
+	printf("with fec package content error rate:%f\%\n",\
+	(float)100*withFecDataCorrputCount/totalReceivePackageNum);
+	printf("without fec package content error rate:%f\%\n",\
+	(float)100*withoutFecDataCorrputCount/totalReceivePackageNum);
+	printf("with fec loss rate:%f\%\n",\
+	(float)100*(totalNotReceivePackageNum+withFecDataCorrputCount)/\
 	(totalNotReceivePackageNum+ totalReceivePackageNum));
-	printf("without fec loss rate:%d\n",\
-	(totalNotReceivePackageNum+withoutFecDataCorrputCount)/\
+	printf("without fec loss rate:%f\%\n",\
+	(float)100*(totalNotReceivePackageNum+withoutFecDataCorrputCount)/\
 	(totalNotReceivePackageNum+ totalReceivePackageNum));
 	
 
