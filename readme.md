@@ -1,0 +1,3 @@
+其實就只是multicast的protocal
+使用setsocketopt 把client加入群組
+server 傳資料到這個群組
